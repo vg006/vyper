@@ -1,44 +1,43 @@
 package cli
 
 import (
+	"flag"
 	"fmt"
 	"os"
 )
+
+var c Cli
 
 type Command struct {
 	Name        string
 	Usage       string
 	Flags       []Flag
 	SubCommands []Command
-	Action      func(args []string) error
+	Action      func() error
 	Alias       string
 }
 
 type Flag struct {
 	Name         string
+	Variable     any
 	Usage        string
 	Required     bool
 	DefaultValue string
-	Action       func(value string) error
+	Action       func() error
 }
 
 type Cli struct {
 	commands []Command
-	flags    []Flag
 }
 
-func NewCli() *Cli {
-	return &Cli{}
-}
-
-func (c *Cli) AddCommand(command Command) *Command {
+func AddCommand(command Command) {
 	c.commands = append(c.commands, command)
-	return &c.commands[len(c.commands)-1]
+	return
 }
 
-func (cmd *Command) AddSubCommand(subCommand Command) *Command {
+func (cmd *Command) AddSubCommand(subCommand Command) {
 	cmd.SubCommands = append(cmd.SubCommands, subCommand)
-	return &cmd.SubCommands[len(cmd.SubCommands)-1]
+	return
 }
 
 func isNestedCommand(args []string, commands []Command) (*Command, []string) {
@@ -61,20 +60,34 @@ func isNestedCommand(args []string, commands []Command) (*Command, []string) {
 	return nil, nil
 }
 
-func (c *Cli) Run() error {
+func Run() error {
 	args := os.Args[1:]
-
-	if len(args) == 0 {
-		return nil
-	}
+	var err error
 
 	command, remainingArgs := isNestedCommand(args, c.commands)
 	if command == nil {
 		return nil
 	}
 
+	err = validateArgs(args, command)
+	if err != nil {
+		return err
+	}
+
+	fs := flag.NewFlagSet(command.Name, flag.ContinueOnError)
+	for _, f := range command.Flags {
+		switch v := f.Variable.(type) {
+		case *string:
+			fs.StringVar(v, f.Name, f.DefaultValue, f.Usage)
+		}
+	}
+
+	if err := fs.Parse(remainingArgs); err != nil {
+		return err
+	}
+
 	if command.Action != nil {
-		if err := command.Action(remainingArgs); err != nil {
+		if err := command.Action(); err != nil {
 			return err
 		}
 	}

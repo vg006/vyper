@@ -1,22 +1,24 @@
 package cli
 
-import "fmt"
+import (
+	"strings"
+)
 
-func (c *Cli) validateCommand() error {
-
-	return nil
+func isRoot() bool {
+	if len(c.args) == 0 || strings.HasPrefix(c.args[0], "-") {
+		return true
+	}
+	return false
 }
 
-func validateArgs(args []string, command *Command) error {
-	if len(args) == 0 {
-		return nil
-	}
+func isExistingCommand(name string) bool {
+	_, exists := c.commands[name]
+	return exists
+}
 
-	for _, flag := range command.Flags {
-		if flag.Required && flag.Variable == nil {
-			return fmt.Errorf("flag %s is required", flag.Name)
-		}
+func isFlag(arg string) bool {
+	if strings.HasPrefix(arg, "-") {
+		return false
 	}
-
-	return nil
+	return true
 }

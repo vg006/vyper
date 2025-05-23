@@ -6,13 +6,33 @@ import (
 	"os"
 )
 
-var c Cli
+func init() {
+	c = &Cli{
+		root:     &Command{},
+		commands: make(map[string]*Command),
+		args:     os.Args[1:],
+	}
+}
+
+var (
+	c *Cli
+)
+
+type (
+	Commands map[string]*Command
+)
+
+type Cli struct {
+	root     *Command
+	args     []string
+	commands Commands
+}
 
 type Command struct {
-	Name        string
+	name        string
 	Usage       string
 	Flags       []Flag
-	SubCommands []Command
+	SubCommands Commands
 	Action      func() error
 	Alias       string
 }
@@ -26,91 +46,108 @@ type Flag struct {
 	Action       func() error
 }
 
-type Cli struct {
-	commands []Command
+func addCommand(name string, command *Command) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Panic:", r)
+		}
+	}()
+
+	if isExistingCommand(command.name) {
+		panic(fmt.Sprintf("command %s already exists", command.name))
+	}
+	c.commands[name] = command
+	c.commands[name].name = name
+	if isExistingCommand(command.Alias) {
+		panic(fmt.Sprintf("alias %s already exists", command.Alias))
+	}
+	c.commands[command.Alias] = command
+	return
+
 }
 
 func AddCommand(command Command) {
-	c.commands = append(c.commands, command)
-	return
-}
-
-func (cmd *Command) AddSubCommand(subCommand Command) {
-	cmd.SubCommands = append(cmd.SubCommands, subCommand)
-	return
-}
-
-func isNestedCommand(args []string, commands []Command) (*Command, []string) {
-	if len(args) == 0 {
-		return nil, nil
+	if isExistingCommand(command.name) {
+		panic(fmt.Sprintf("command %s already exists", command.name))
 	}
+	c.commands[command.name] = &command
+	if isExistingCommand(command.Alias) {
+		panic(fmt.Sprintf("alias %s already exists", command.Alias))
+	}
+	c.commands[command.Alias] = &command
+	return
+}
 
-	for _, command := range commands {
-		if command.Name == args[0] || command.Alias == args[0] {
-			if len(command.SubCommands) > 0 && len(args) > 1 {
-				subCommand, remainingArgs := isNestedCommand(args[1:], command.SubCommands)
-				if subCommand != nil {
-					return subCommand, remainingArgs
+func addCommands(commands Commands) {
+	for name, command := range commands {
+		addCommand(name, command)
+	}
+}
+
+func AddCommands(cmd Commands) {
+	addCommands(cmd)
+}
+
+func Init(root Command, commands Commands) {
+	c.root = &root
+	for name, command := range commands {
+		addCommand(name, command)
+	}
+}
+
+func getCommand() *Command {
+	if isRoot() {
+		return c.root
+	}
+	return recurseCommand(c.args, c.commands)
+}
+
+func recurseCommand(args []string, commands map[string]*Command) *Command {
+	for cmdName, cmd := range commands {
+		if cmdName == args[0] || cmd.Alias == args[0] {
+			if isFlag(args[0]) {
+				fs := flag.NewFlagSet(cmdName, flag.ExitOnError)
+				for _, flag := range cmd.Flags {
+					switch t := flag.Variable.(type) {
+					case *string:
+						fs.StringVar(t, flag.Name, flag.DefaultValue, flag.Usage)
+					}
+				}
+				fs.Parse(args[1:])
+				if len(fs.Args()) != 0 {
+					return recurseCommand(fs.Args(), cmd.SubCommands)
 				}
 			}
-			return &command, args[1:]
+			return cmd
 		}
 	}
-
-	return nil, nil
-}
-
-func Run() error {
-	args := os.Args[1:]
-	var err error
-
-	command, remainingArgs := isNestedCommand(args, c.commands)
-	if command == nil {
-		return nil
-	}
-
-	err = validateArgs(args, command)
-	if err != nil {
-		return err
-	}
-
-	fs := flag.NewFlagSet(command.Name, flag.ContinueOnError)
-	for _, f := range command.Flags {
-		switch v := f.Variable.(type) {
-		case *string:
-			fs.StringVar(v, f.Name, f.DefaultValue, f.Usage)
-		}
-	}
-
-	if err := fs.Parse(remainingArgs); err != nil {
-		return err
-	}
-
-	if command.Action != nil {
-		if err := command.Action(); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
-func (cli *Cli) PrintCommands() {
-	fmt.Println("Commands:")
-	for _, command := range cli.commands {
-		fmt.Printf("  %s: %s\n", command.Name, command.Usage)
-		if len(command.SubCommands) > 0 {
-			command.PrintSubCommands()
-		}
+func Run() error {
+	command := getCommand()
+	if command == nil {
+		return fmt.Errorf("command not found")
 	}
+
+	if command.Action == nil {
+		return fmt.Errorf("no action defined for command %s", command.name)
+	}
+
+	if err := command.Action(); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (cmd *Command) PrintSubCommands() {
-	fmt.Printf("Subcommands of %s:\n", cmd.Name)
-	for _, subCommand := range cmd.SubCommands {
-		fmt.Printf("  %s: %s\n", subCommand.Name, subCommand.Usage)
-		if len(subCommand.SubCommands) > 0 {
-			subCommand.PrintSubCommands()
+func PrintCommands() {
+	for name, cmd := range c.commands {
+		fmt.Printf("Command: %s\n", name)
+		fmt.Printf("Alias: %s\n", cmd.Alias)
+		fmt.Printf("Usage: %s\n", cmd.Usage)
+		fmt.Println("Flags:")
+		for _, flag := range cmd.Flags {
+			fmt.Printf("  -%s: %s (default: %s)\n", flag.Name, flag.Usage, flag.DefaultValue)
 		}
 	}
 }

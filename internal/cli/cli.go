@@ -46,6 +46,13 @@ type Flag struct {
 	Action       func() error
 }
 
+func Init(root Command, commands Commands) {
+	c.root = &root
+	for name, command := range commands {
+		addCommand(name, command)
+	}
+}
+
 func addCommand(name string, command *Command) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -62,20 +69,10 @@ func addCommand(name string, command *Command) {
 		panic(fmt.Sprintf("alias %s already exists", command.Alias))
 	}
 	c.commands[command.Alias] = command
-	return
-
 }
 
 func AddCommand(command Command) {
-	if isExistingCommand(command.name) {
-		panic(fmt.Sprintf("command %s already exists", command.name))
-	}
-	c.commands[command.name] = &command
-	if isExistingCommand(command.Alias) {
-		panic(fmt.Sprintf("alias %s already exists", command.Alias))
-	}
-	c.commands[command.Alias] = &command
-	return
+	addCommand(command.name, &command)
 }
 
 func addCommands(commands Commands) {
@@ -88,32 +85,25 @@ func AddCommands(cmd Commands) {
 	addCommands(cmd)
 }
 
-func Init(root Command, commands Commands) {
-	c.root = &root
-	for name, command := range commands {
-		addCommand(name, command)
-	}
-}
-
 func getCommand() *Command {
-	if isRoot() {
+	fs := parseFlags(c.root)
+	if err := fs.Parse(c.args); err != nil {
+		panic(err)
+	}
+	if len(fs.Args()) == 0 {
 		return c.root
 	}
-	return recurseCommand(c.args, c.commands)
+	return recurseCommand(fs.Args(), c.commands)
 }
 
 func recurseCommand(args []string, commands map[string]*Command) *Command {
 	for cmdName, cmd := range commands {
 		if cmdName == args[0] || cmd.Alias == args[0] {
 			if isFlag(args[0]) {
-				fs := flag.NewFlagSet(cmdName, flag.ExitOnError)
-				for _, flag := range cmd.Flags {
-					switch t := flag.Variable.(type) {
-					case *string:
-						fs.StringVar(t, flag.Name, flag.DefaultValue, flag.Usage)
-					}
+				fs := parseFlags(cmd)
+				if err := fs.Parse(args[1:]); err != nil {
+					panic(err)
 				}
-				fs.Parse(args[1:])
 				if len(fs.Args()) != 0 {
 					return recurseCommand(fs.Args(), cmd.SubCommands)
 				}
@@ -124,7 +114,26 @@ func recurseCommand(args []string, commands map[string]*Command) *Command {
 	return nil
 }
 
+func parseFlags(cmd *Command) *flag.FlagSet {
+	fs := flag.NewFlagSet(cmd.name, flag.ExitOnError)
+	for _, flag := range cmd.Flags {
+		switch t := flag.Variable.(type) {
+		case *string:
+			fs.StringVar(t, flag.Name, flag.DefaultValue, flag.Usage)
+		case *int:
+			fs.IntVar(t, flag.Name, 0, flag.Usage)
+		}
+	}
+	return fs
+}
+
 func Run() error {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Panic:", r)
+		}
+	}()
+
 	command := getCommand()
 	if command == nil {
 		return fmt.Errorf("command not found")
